@@ -33,17 +33,6 @@
         <dict>
             <key>Arguments</key>
             <dict>
-                <key>destination_path</key>
-                <string>%RECIPE_CACHE_DIR%/payload</string>
-                <key>pkg_payload_path</key>
-                <string>%RECIPE_CACHE_DIR%/unpack/VEXcodeIQ.pkg/Payload</string>
-            </dict>
-            <key>Processor</key>
-            <string>PkgPayloadUnpacker</string>
-        </dict>
-        <dict>
-            <key>Arguments</key>
-            <dict>
                 <key>input_plist_path</key>
                 <string>%RECIPE_CACHE_DIR%/payload/VEXcode IQ.app/Contents/Info.plist</string>
                 <key>plist_version_key</key>
