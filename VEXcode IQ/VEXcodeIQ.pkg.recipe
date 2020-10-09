@@ -30,6 +30,14 @@
             <key>Processor</key>
             <string>FlatPkgUnpacker</string>
         </dict>
+        <dict>
+            <key>Arguments</key>
+            <dict>
+                <key>input_plist_path</key>
+                <string>%RECIPE_CACHE_DIR%/payload/VEXcode IQ.app/Contents/Info.plist</string>
+                <key>plist_version_key</key>
+                <string>CFBundleVersion</string>
+            </dict>
             <key>Processor</key>
             <string>Versioner</string>
         </dict>
