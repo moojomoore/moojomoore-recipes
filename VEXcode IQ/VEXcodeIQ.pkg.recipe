@@ -5,7 +5,7 @@
     <key>Description</key>
     <string>Downloads the latest version of VEXcode IQ and builds a pkg.</string>
     <key>Identifier</key>
-    <string>com.github.moojomoore.pkg.VEXcodeIQ/string>
+    <string>com.github.moojomoore.pkg.VEXcodeIQ</string>
     <key>Input</key>
     <dict>
     	<key>BUNDLE_ID</key>
