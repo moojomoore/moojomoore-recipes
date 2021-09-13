@@ -2,33 +2,35 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>Comment</key>
+	<string>Created with Recipe Robot v2.2.0 (https://github.com/homebysix/recipe-robot)</string>
 	<key>Description</key>
-	<string>Downloads the latest version of UC-One and creates a package. Then, uploads to the Jamf Pro Server.</string>
+	<string>Downloads the latest version of Webex and imports it into your JSS.</string>
 	<key>Identifier</key>
-	<string>com.github.moojomoore.jss.UC-One</string>
+	<string>com.github.jss-recipes.jss.Webex</string>
 	<key>Input</key>
 	<dict>
 		<key>CATEGORY</key>
-		<string>Collaboration</string>
+		<string>Productivity</string>
 		<key>GROUP_NAME</key>
 		<string>%NAME%-update-smart</string>
 		<key>GROUP_TEMPLATE</key>
-		<string>SmartGroupTemplate.xml</string>
+		<string>CFBundleVersionSmartGroupTemplate.xml</string>
 		<key>NAME</key>
-		<string>UC-One</string>
+		<string>Webex</string>
 		<key>POLICY_CATEGORY</key>
 		<string>Testing</string>
 		<key>POLICY_TEMPLATE</key>
 		<string>PolicyTemplate.xml</string>
 		<key>SELF_SERVICE_DESCRIPTION</key>
-		<string></string>
+		<string>Make teamwork your best work.</string>
 		<key>SELF_SERVICE_ICON</key>
-		<string>UC-One.png</string>
+		<string>%NAME%.png</string>
 	</dict>
 	<key>MinimumVersion</key>
 	<string>1.0.0</string>
 	<key>ParentRecipe</key>
-	<string>com.github.moojomoore.pkg.UC-One</string>
+	<string>com.github.jmoore.pkg.Webex</string>
 	<key>Process</key>
 	<array>
 		<dict>
@@ -36,6 +38,13 @@
 			<dict>
 				<key>category</key>
 				<string>%CATEGORY%</string>
+				<key>extension_attributes</key>
+				<array>
+					<dict>
+						<key>ext_attribute_path</key>
+						<string>CFBundleVersionExtensionAttribute.xml</string>
+					</dict>
+				</array>
 				<key>groups</key>
 				<array>
 					<dict>
