@@ -7,7 +7,7 @@
 	<key>Description</key>
 	<string>Downloads the latest version of Webex and creates a package.</string>
 	<key>Identifier</key>
-	<string>com.github.jmoore.pkg.Webex</string>
+	<string>com.github.moojomoore.pkg.Webex</string>
 	<key>Input</key>
 	<dict>
 		<key>NAME</key>
@@ -16,7 +16,7 @@
 	<key>MinimumVersion</key>
 	<string>1.0.0</string>
 	<key>ParentRecipe</key>
-	<string>com.github.jmoore.download.Webex</string>
+	<string>com.github.moojomoore.download.Webex</string>
 	<key>Process</key>
 	<array>
 		<dict>
