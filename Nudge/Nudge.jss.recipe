@@ -28,7 +28,7 @@
 	<key>MinimumVersion</key>
 	<string>1.0.0</string>
 	<key>ParentRecipe</key>
-	<string>com.github.erikng.pkg.Nudge</string>
+	<string>com.github.erikng.download.Nudge</string>
 	<key>Process</key>
 	<array>
 		<dict>
