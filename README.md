@@ -11,12 +11,7 @@ AutoPkg recipes maintained by [moojomoore](https://github.com/moojomoore).
 | Sparrow | `Sparrow.download`, `Sparrow.pkg`, `Sparrow.munki` | GitHub releases from `sparrowwallet/sparrow` |
 | Trezor Suite | `TrezorSuite.munki` | Parents `com.rderewianko.download.TrezorSuite` from `autopkg/rderewianko-recipes` |
 
-## Notes
-
-Sparrow and Trezor Suite ship separate macOS builds by architecture. Their recipes default to Apple Silicon:
-
-- Sparrow: `ARCH` defaults to `aarch64`; set `ARCH=x86_64` for Intel.
-- Trezor Suite: `ARCH` defaults to `arm64`; set `ARCH=x64` for Intel.
+## Parent Repos
 
 Ledger Live and Trezor Suite already have working public download/pkg recipes, so this repo only carries Munki children for those apps. Add the parent repos before running those Munki recipes:
 
