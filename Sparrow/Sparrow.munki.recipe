@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Description</key>
+  <string>Imports the latest version of Sparrow into Munki. Set ARCH to "aarch64" (default) for Apple Silicon or "x86_64" for Intel.</string>
+  <key>Identifier</key>
+  <string>com.github.moojomoore.munki.Sparrow</string>
+  <key>Input</key>
+  <dict>
+    <key>ARCH</key>
+    <string>aarch64</string>
+    <key>MUNKI_REPO_SUBDIR</key>
+    <string>apps/Sparrow</string>
+    <key>NAME</key>
+    <string>Sparrow</string>
+    <key>pkginfo</key>
+    <dict>
+      <key>catalogs</key>
+      <array>
+        <string>testing</string>
+      </array>
+      <key>description</key>
+      <string>Desktop Bitcoin wallet focused on security and privacy.</string>
+      <key>developer</key>
+      <string>Sparrow Wallet</string>
+      <key>display_name</key>
+      <string>Sparrow</string>
+      <key>name</key>
+      <string>Sparrow</string>
+      <key>unattended_install</key>
+      <true/>
+    </dict>
+  </dict>
+  <key>MinimumVersion</key>
+  <string>2.0</string>
+  <key>ParentRecipe</key>
+  <string>com.github.moojomoore.download.Sparrow</string>
+  <key>Process</key>
+  <array>
+    <dict>
+      <key>Processor</key>
+      <string>MunkiImporter</string>
+      <key>Arguments</key>
+      <dict>
+        <key>pkg_path</key>
+        <string>%pathname%</string>
+        <key>repo_subdirectory</key>
+        <string>%MUNKI_REPO_SUBDIR%</string>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Description</key>
+  <string>Imports the latest version of Trezor Suite into Munki. Requires the parent recipe from autopkg/rderewianko-recipes. Set ARCH to "arm64" (default) for Apple Silicon or "x64" for Intel.</string>
+  <key>Identifier</key>
+  <string>com.github.moojomoore.munki.TrezorSuite</string>
+  <key>Input</key>
+  <dict>
+    <key>ARCH</key>
+    <string>arm64</string>
+    <key>MUNKI_REPO_SUBDIR</key>
+    <string>apps/TrezorSuite</string>
+    <key>NAME</key>
+    <string>Trezor Suite</string>
+    <key>pkginfo</key>
+    <dict>
+      <key>catalogs</key>
+      <array>
+        <string>testing</string>
+      </array>
+      <key>description</key>
+      <string>Desktop app for managing Trezor hardware wallets.</string>
+      <key>developer</key>
+      <string>Trezor</string>
+      <key>display_name</key>
+      <string>Trezor Suite</string>
+      <key>name</key>
+      <string>TrezorSuite</string>
+      <key>unattended_install</key>
+      <true/>
+    </dict>
+  </dict>
+  <key>MinimumVersion</key>
+  <string>2.0</string>
+  <key>ParentRecipe</key>
+  <string>com.rderewianko.download.TrezorSuite</string>
+  <key>Process</key>
+  <array>
+    <dict>
+      <key>Processor</key>
+      <string>MunkiImporter</string>
+      <key>Arguments</key>
+      <dict>
+        <key>pkg_path</key>
+        <string>%pathname%</string>
+        <key>repo_subdirectory</key>
+        <string>%MUNKI_REPO_SUBDIR%</string>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>
