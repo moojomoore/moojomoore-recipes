@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Description</key>
+	<string>Stub recipe for the CimianImporter shared processor (Windows Cimian counterpart to MunkiImporter).</string>
+	<key>Identifier</key>
+	<string>com.github.moojomoore.CimianImporter</string>
+	<key>Input</key>
+	<dict/>
+	<key>MinimumVersion</key>
+	<string>2.3</string>
+	<key>Process</key>
+	<array/>
+</dict>
+</plist>
