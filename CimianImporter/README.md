@@ -21,7 +21,8 @@ This is the Windows counterpart to AutoPkg core’s `MunkiImporter`. Behaviors m
 | Already imported | Skip on installer hash, app version, receipt, or file checksum (same arch) | Skip when any pkgsinfo already has the same installer `hash` (and matching `supported_architectures` when present). Use `force_cimianimport` to override |
 | Run summary | `munki_importer_summary_result` + `munki_repo_changed` | `cimian_importer_summary_result` + `cimian_repo_changed` |
 | Icons | munkilib extract/reuse (macOS; needs Munki tools) | `CimianIconExtractor` (PE / MSI / MSIX / nupkg on Linux); reuses `icons/<name>.png` when present |
-| Extra copy | Optional uninstaller pkg | Optional `uninstaller_pathname` copied into `pkgs/`; optional S3 upload (`upload_s3` / `CIMIAN_UPLOAD_S3`) |
+| Extra copy | Optional uninstaller pkg | Optional `uninstaller_pathname` copied into `pkgs/` |
+| Object store | Not part of import (repo plugins or a later sync) | Not part of import (stage locally; sync separately if needed) |
 | Catalog rebuild | Not part of import (`makecatalogs` later) | Not part of import (Cimian catalog rebuild / gitops later) |
 | Silent install | Munki pkginfo keys | `installer.flags`, `installer.switches`, `installer.args` (unprefixed), `installer.subcommand` |
 | Hash check | From makepkginfo | Optional `expected_sha256` before staging |
@@ -30,7 +31,6 @@ This is the Windows counterpart to AutoPkg core’s `MunkiImporter`. Behaviors m
 
 - `pkgsinfo` — overlay dict (same idea as a `.munki` recipe’s `pkginfo`)
 - `manifest_assignment` — optional pkgsinfo metadata (also via `pkgsinfo` overlay)
-- `upload_s3` / `s3_bucket` / `CIMIAN_S3_BUCKET` — optional package and icon upload
 - `uninstaller_pathname` — optional uninstaller to stage under `pkgs/`
 
 ## Recipe `pkgsinfo` overlay

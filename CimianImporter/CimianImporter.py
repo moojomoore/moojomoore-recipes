@@ -24,7 +24,6 @@ from __future__ import absolute_import
 import copy
 import hashlib
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -241,18 +240,6 @@ class CimianImporter(Processor):
                 "May also be supplied via the pkgsinfo overlay."
             ),
         },
-        "upload_s3": {
-            "required": False,
-            "default": False,
-            "description": (
-                "When true, upload pkgs/<rel_location> (and icons/) to S3. "
-                "Also enabled when env CIMIAN_UPLOAD_S3 is truthy."
-            ),
-        },
-        "s3_bucket": {
-            "required": False,
-            "description": "Destination bucket. Defaults to CIMIAN_S3_BUCKET.",
-        },
         "uninstaller_pathname": {
             "required": False,
             "description": (
@@ -290,10 +277,8 @@ class CimianImporter(Processor):
         "cimian_package_path": {"description": "Staged installer path."},
         "cimian_package_sha256": {"description": "Installer SHA-256 (no prefix)."},
         "cimian_rel_location": {"description": "Installer path relative to pkgs/."},
-        "cimian_s3_uri": {"description": "s3:// URI when package upload_s3 ran."},
         "cimian_icon_path": {"description": "Extracted icon path when present."},
         "cimian_icon_name": {"description": "pkgsinfo icon_name when present."},
-        "cimian_icon_s3_uri": {"description": "s3:// URI when icon upload ran."},
         "cimian_repo_changed": {
             "description": "True when a new item was imported; False when skipped."
         },
@@ -342,54 +327,6 @@ class CimianImporter(Processor):
                     pass
             return [part.strip() for part in text.split(",") if part.strip()]
         return [value]
-
-    def _should_upload_s3(self):
-        if _truthy(self.env.get("upload_s3")):
-            return True
-        return _truthy(os.environ.get("CIMIAN_UPLOAD_S3"))
-
-    def _resolve_s3_bucket(self):
-        for candidate in (
-            str(self.env.get("s3_bucket") or "").strip(),
-            os.environ.get("CIMIAN_S3_BUCKET", "").strip(),
-        ):
-            # Ignore unset shell-style sentinels like "$CIMIAN_S3_BUCKET".
-            if candidate and not candidate.startswith("$"):
-                return candidate
-        return ""
-
-    def _upload_s3_object(self, local_path, key):
-        bucket = self._resolve_s3_bucket()
-        if not bucket:
-            raise ProcessorError(
-                "upload_s3 requested but no bucket set "
-                "(s3_bucket / CIMIAN_S3_BUCKET)"
-            )
-        try:
-            import boto3
-            from botocore.exceptions import BotoCoreError, ClientError
-        except ImportError as exc:
-            raise ProcessorError(
-                "boto3 is required for Cimian S3 uploads (uv sync in CI)"
-            ) from exc
-
-        client = boto3.client("s3")
-        try:
-            client.upload_file(str(local_path), bucket, key)
-            client.head_object(Bucket=bucket, Key=key)
-        except (BotoCoreError, ClientError, OSError) as exc:
-            raise ProcessorError(
-                f"Failed uploading s3://{bucket}/{key}: {exc}"
-            ) from exc
-
-        uri = f"s3://{bucket}/{key}"
-        self.output(f"Uploaded {uri}")
-        return uri
-
-    def _upload_package(self, package_path, rel_location):
-        uri = self._upload_s3_object(package_path, f"pkgs/{rel_location}")
-        self.env["cimian_s3_uri"] = uri
-        return uri
 
     @staticmethod
     def _load_pkgsinfo(path):
@@ -796,13 +733,4 @@ class CimianImporter(Processor):
         self._set_summary(item, pkgsinfo_path, package_path, repo, icon_filename)
         self.output(f"Imported {item_name} {version} → {rel_location}")
 
-        if self._should_upload_s3():
-            self._upload_package(package_path, rel_location)
-            if icon_path is not None and icon_filename:
-                icon_uri = self._upload_s3_object(icon_path, f"icons/{icon_filename}")
-                self.env["cimian_icon_s3_uri"] = icon_uri
 
-
-if __name__ == "__main__":
-    PROCESSOR = CimianImporter()
-    PROCESSOR.execute_shell()
