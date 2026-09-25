@@ -84,7 +84,9 @@ Put catalogs, category, developer, description, display_name, unattended_*, supp
 
 Unknown top-level or installer keys are passed through with a warning (same as MunkiImporter). Structurally unsafe values still raise `ProcessorError`. Prefer `cimian_pkgsinfo_lint` in CI for schema gates.
 
-New imports stamp `_metadata.creation_date` as `YYYY-MM-DDTHH:MM:SSZ` when absent (munkiimport parity). If the recipe sets `force_install_after_date`, it is normalized to the same ISO8601 `Z` string form used by estate pkgsinfo / `cimian_autopromote` (PyYAML datetime dumps are avoided).
+New imports stamp `_metadata.creation_date` as `YYYY-MM-DDTHH:MM:SSZ` when absent (munkiimport parity).
+
+If the recipe sets `force_install_after_date`, it is normalized to `YYYY-MM-DDTHH:MM:SS` (no `Z`) to match the Cimian wiki and YamlDotNet `DateTime?` fields compared against `DateTime.Now`.
 
 When omitted after overlay, defaults are: `catalogs=["import"]`, `supported_architectures=["x64"]`, `unattended_install` / `unattended_uninstall` = true, `display_name` = `cimianimport_appname` or `item_name`.
 
