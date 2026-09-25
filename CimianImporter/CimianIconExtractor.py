@@ -33,6 +33,29 @@ from pathlib import Path
 from typing import Optional
 
 DESIRED_ICON_SIZE = 256
+# Bound PIL decoding and MSI unpack work from untrusted installers.
+MAX_IMAGE_PIXELS = 25_000_000
+MAX_ICON_SOURCE_BYTES = 200 * 1024 * 1024
+
+
+def _path_under(base: Path, candidate: Path) -> bool:
+    """Return True when *candidate* resolves inside *base*."""
+    try:
+        candidate.resolve().relative_to(base.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _safe_child(base: Path, rel: str) -> Optional[Path]:
+    """Join *rel* under *base* only when the result stays inside *base*."""
+    text = str(rel or "").replace("\\", "/").strip()
+    if not text or text.startswith("/") or ".." in Path(text).parts:
+        return None
+    candidate = (base / text).resolve()
+    if not _path_under(base, candidate):
+        return None
+    return candidate
 
 
 def extract_installer_icon(installer_path: Path, dest_png: Path) -> Optional[str]:
@@ -43,6 +66,11 @@ def extract_installer_icon(installer_path: Path, dest_png: Path) -> Optional[str
     """
     path = Path(installer_path)
     if not path.is_file():
+        return None
+    try:
+        if path.stat().st_size > MAX_ICON_SOURCE_BYTES:
+            return None
+    except OSError:
         return None
 
     dest_png = Path(dest_png)
@@ -233,14 +261,22 @@ def _extract_from_msix(msix_path: Path, dest_png: Path) -> bool:
             if not match:
                 continue
             rel = match.group(1).replace("\\", "/")
-            logo_path = tmp_path / rel
+            logo_path = _safe_child(tmp_path, rel)
+            if logo_path is None:
+                continue
             logo_dir = logo_path.parent
+            if not _path_under(tmp_path, logo_dir):
+                continue
             base = logo_path.stem
             ext = logo_path.suffix
             for scale in scales:
                 name = f"{base}.{scale}{ext}" if scale else f"{base}{ext}"
                 candidate = logo_dir / name
-                if candidate.is_file() and _image_to_png(candidate, dest_png):
+                if (
+                    _path_under(tmp_path, candidate)
+                    and candidate.is_file()
+                    and _image_to_png(candidate, dest_png)
+                ):
                     return True
             if logo_path.is_file() and _image_to_png(logo_path, dest_png):
                 return True
@@ -258,17 +294,27 @@ def _extract_from_nupkg(nupkg_path: Path, dest_png: Path) -> bool:
             return False
 
         for nuspec in tmp_path.rglob("*.nuspec"):
+            if not _path_under(tmp_path, nuspec):
+                continue
             text = nuspec.read_text(encoding="utf-8", errors="ignore")
             match = re.search(r"<icon>([^<]+)</icon>", text, re.IGNORECASE)
             if match:
                 icon_rel = match.group(1).strip().replace("\\", "/")
-                candidate = tmp_path / icon_rel
-                if candidate.is_file() and _image_to_png(candidate, dest_png):
+                candidate = _safe_child(tmp_path, icon_rel)
+                if (
+                    candidate is not None
+                    and candidate.is_file()
+                    and _image_to_png(candidate, dest_png)
+                ):
                     return True
 
         for pattern in ("icon.png", "icon.ico", "images/icon.png"):
             for candidate in tmp_path.rglob(pattern):
-                if candidate.is_file() and _image_to_png(candidate, dest_png):
+                if (
+                    _path_under(tmp_path, candidate)
+                    and candidate.is_file()
+                    and _image_to_png(candidate, dest_png)
+                ):
                     return True
     return False
 
@@ -293,6 +339,7 @@ def _image_to_png(source: Path, dest_png: Path) -> bool:
     except ImportError:
         return False
     try:
+        Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
         image = Image.open(source)
         return _save_best_png(image, dest_png)
     except Exception:  # noqa: BLE001
@@ -303,6 +350,7 @@ def _save_best_png(image, dest_png: Path) -> bool:
     """Pick the largest frame (ICO multi-size) and write PNG ≤ DESIRED_ICON_SIZE."""
     from PIL import Image
 
+    Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
     frames: list = []
     try:
         index = 0
@@ -310,12 +358,17 @@ def _save_best_png(image, dest_png: Path) -> bool:
             image.seek(index)
             frames.append(image.copy())
             index += 1
+            # Bound multi-frame ICO decoding.
+            if index > 64:
+                break
     except EOFError:
         pass
     if not frames:
         frames = [image]
 
     best = max(frames, key=lambda frame: frame.size[0] * frame.size[1])
+    if best.size[0] * best.size[1] > MAX_IMAGE_PIXELS:
+        return False
     if max(best.size) > DESIRED_ICON_SIZE:
         best = best.resize(
             (

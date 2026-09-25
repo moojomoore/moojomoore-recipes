@@ -421,6 +421,59 @@ class CimianImporter(Processor):
             )
         return product_code, upgrade_code
 
+    @staticmethod
+    def _validate_single_subdir(subdir, label="pkginfo_subdir"):
+        """Require one safe path segment (rejects '.', '..', and separators)."""
+        if (
+            not subdir
+            or subdir in (".", "..")
+            or "/" in subdir
+            or "\\" in subdir
+            or not SAFE_ITEM_NAME.fullmatch(subdir)
+        ):
+            raise ProcessorError(f"Invalid {label}: {subdir}")
+
+    @staticmethod
+    def _resolve_under(base, *parts):
+        """Resolve *parts under *base*; raise if the result escapes *base*."""
+        base_resolved = Path(base).resolve()
+        candidate = base_resolved.joinpath(*parts).resolve()
+        try:
+            candidate.relative_to(base_resolved)
+        except ValueError as error:
+            raise ProcessorError(
+                f"Path escapes {base_resolved}: {'/'.join(str(p) for p in parts)}"
+            ) from error
+        return candidate
+
+    @staticmethod
+    def _validate_repo_rel_location(rel_location, label="installer.location"):
+        """Ensure a pkgs-relative location has no traversal and is non-empty."""
+        text = str(rel_location or "").strip()
+        if not text or text.startswith("/") or text.startswith("\\"):
+            raise ProcessorError(f"Invalid {label}: {rel_location}")
+        parts = Path(text.replace("\\", "/")).parts
+        if not parts or any(part in ("", ".", "..") for part in parts):
+            raise ProcessorError(f"Invalid {label}: {rel_location}")
+        return text.replace("\\", "/")
+
+    @staticmethod
+    def _safe_icon_filename(name):
+        """Return a basename under icons/ or None if unsafe."""
+        text = str(name or "").strip()
+        if not text:
+            return None
+        filename = text if text.endswith(".png") else f"{text}.png"
+        if (
+            "/" in filename
+            or "\\" in filename
+            or ".." in filename
+            or filename in (".png",)
+            or not SAFE_ITEM_NAME.fullmatch(Path(filename).stem)
+        ):
+            return None
+        return filename
+
     def _validate_pkgsinfo_keys(self, item):
         unknown = sorted(set(item) - VALID_TOP_KEYS)
         if unknown:
@@ -434,6 +487,20 @@ class CimianImporter(Processor):
                 raise ProcessorError(
                     "Unknown installer key(s): " + ", ".join(bad)
                 )
+            # location/hash/size are forced from the staged artifact in main();
+            # do not reject overlay values here (they are overwritten).
+            if "temp_dir" in installer and installer.get("temp_dir") is not None:
+                temp_dir = str(installer.get("temp_dir"))
+                if (
+                    ".." in Path(temp_dir.replace("\\", "/")).parts
+                    or temp_dir.startswith("/")
+                    or temp_dir.startswith("\\")
+                ):
+                    raise ProcessorError(f"Invalid installer.temp_dir: {temp_dir}")
+        icon_name = item.get("icon_name")
+        if icon_name is not None and icon_name != "":
+            if self._safe_icon_filename(icon_name) is None:
+                raise ProcessorError(f"Invalid pkgsinfo icon_name: {icon_name}")
 
     def _apply_pkgsinfo_overlay(self, item):
         overlay = self._pkgsinfo_overlay()
@@ -500,8 +567,13 @@ class CimianImporter(Processor):
             raise ProcessorError("pkgsinfo._metadata must be a dict when set")
         metadata.update(additions)
 
-    def _maybe_extract_icon(self, source, repo, item_name):
-        """Extract or reuse icon; return (icon_path, icon_name) or (None, None)."""
+    def _maybe_extract_icon(self, source, repo, item_name, preferred_icon_name=None):
+        """Extract or reuse icon; return (icon_path, icon_name) or (None, None).
+
+        Preference order for the filename: env ``icon_name``, then
+        *preferred_icon_name* (typically pkgsinfo overlay), then
+        ``<item_name>.png``.
+        """
         # Default on — match AutoPkg Munki extract_icon pref behavior.
         if "extract_icon" in self.env and self.env.get("extract_icon") not in (
             None,
@@ -513,16 +585,24 @@ class CimianImporter(Processor):
         if not extract:
             return None, None
 
-        override = str(self.env.get("icon_name") or "").strip()
-        if override:
-            icon_filename = override if override.endswith(".png") else f"{override}.png"
-        else:
-            icon_filename = f"{item_name}.png"
-        if "/" in icon_filename or "\\" in icon_filename or ".." in icon_filename:
-            self.output(f"Ignoring unsafe icon_name: {icon_filename}")
+        candidates = (
+            str(self.env.get("icon_name") or "").strip(),
+            str(preferred_icon_name or "").strip(),
+            f"{item_name}.png",
+        )
+        icon_filename = None
+        for candidate in candidates:
+            if not candidate:
+                continue
+            safe = self._safe_icon_filename(candidate)
+            if safe:
+                icon_filename = safe
+                break
+            self.output(f"Ignoring unsafe icon_name: {candidate}")
+        if not icon_filename:
             return None, None
 
-        icon_path = repo / "icons" / icon_filename
+        icon_path = self._resolve_under(repo / "icons", icon_filename)
         # Munki-style reuse: keep an existing icon instead of re-extracting.
         if icon_path.is_file() and icon_path.stat().st_size > 0:
             self.output(f"Reusing existing icon → {icon_path}")
@@ -548,6 +628,17 @@ class CimianImporter(Processor):
 
         self.output(f"Extracted icon → {icon_path}")
         return icon_path, icon_filename
+
+    def _staged_pkg_is_intact(self, repo, rel_location, package_hash):
+        """Return True when pkgs/rel_location exists and matches *package_hash*."""
+        try:
+            rel = self._validate_repo_rel_location(rel_location)
+            existing_pkg = self._resolve_under(repo / "pkgs", *Path(rel).parts)
+        except ProcessorError:
+            return False
+        if not existing_pkg.is_file():
+            return False
+        return self._sha256(existing_pkg).lower() == str(package_hash).lower()
 
     def _clear_summary(self):
         if "cimian_importer_summary_result" in self.env:
@@ -617,7 +708,9 @@ class CimianImporter(Processor):
         item_name = str(self.env.get("item_name") or self.env.get("NAME") or "").strip()
         version = str(self.env["version"]).strip()
         installer_type = str(self.env["installer_type"]).strip().lower()
-        pkginfo_subdir = str(self.env.get("pkginfo_subdir") or "apps").strip().strip("/\\")
+        pkginfo_subdir = str(self.env.get("pkginfo_subdir") or "apps").strip().strip(
+            "/\\"
+        )
         overlay = self._pkgsinfo_overlay()
         architectures = self._as_list(
             overlay.get("supported_architectures") or ["x64"]
@@ -645,18 +738,19 @@ class CimianImporter(Processor):
             raise ProcessorError(f"Invalid Cimian version: {version}")
         if installer_type not in SUPPORTED_INSTALLER_TYPES:
             raise ProcessorError(f"Unsupported Cimian installer type: {installer_type}")
-        if not SAFE_ITEM_NAME.fullmatch(pkginfo_subdir.replace("/", "").replace("\\", "")):
-            # Allow a single path segment only.
-            if "/" in pkginfo_subdir or "\\" in pkginfo_subdir or ".." in pkginfo_subdir:
-                raise ProcessorError(f"Invalid pkginfo_subdir: {pkginfo_subdir}")
+        self._validate_single_subdir(pkginfo_subdir)
 
         package_hash = self._sha256(source)
+        size = source.stat().st_size
         suffix = source.suffix.lower() or f".{installer_type}"
         rel_location = self._staged_rel_location(
             pkginfo_subdir, item_name, version, suffix
         )
-        package_path = repo / "pkgs" / rel_location
-        pkgsinfo_dir = repo / "pkgsinfo" / pkginfo_subdir / item_name
+        self._validate_repo_rel_location(rel_location)
+        package_path = self._resolve_under(repo / "pkgs", *Path(rel_location).parts)
+        pkgsinfo_dir = self._resolve_under(
+            repo / "pkgsinfo", pkginfo_subdir, item_name
+        )
         pkgsinfo_path = pkgsinfo_dir / f"{item_name}-{version}.{extension}"
 
         force = self._env_bool("force_cimianimport", False)
@@ -673,21 +767,28 @@ class CimianImporter(Processor):
                 existing_rel = str(
                     existing_installer.get("location") or rel_location
                 )
-                existing_pkg = repo / "pkgs" / existing_rel
-                existing_info = matched_path or pkgsinfo_path
+                if self._staged_pkg_is_intact(repo, existing_rel, package_hash):
+                    existing_pkg = self._resolve_under(
+                        repo / "pkgs", *Path(
+                            self._validate_repo_rel_location(existing_rel)
+                        ).parts
+                    )
+                    existing_info = matched_path or pkgsinfo_path
+                    self.output(
+                        f"Item already exists in the Cimian repo as "
+                        f"pkgs/{existing_rel} (matching installer hash)."
+                    )
+                    self._set_skip_outputs(
+                        existing_info, existing_pkg, existing_rel, package_hash
+                    )
+                    return
                 self.output(
-                    f"Item already exists in the Cimian repo as pkgs/{existing_rel} "
-                    f"(matching installer hash)."
+                    f"Matching pkgsinfo hash found but pkgs/{existing_rel} is "
+                    f"missing or corrupt; re-importing."
                 )
-                self._set_skip_outputs(
-                    existing_info, existing_pkg, existing_rel, package_hash
-                )
-                return
 
-        package_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, package_path)
-
-        size = package_path.stat().st_size
+        # Build and validate pkgsinfo before staging so a failed validation
+        # cannot leave an orphan installer under pkgs/.
         installer = {
             "type": installer_type,
             "location": rel_location,
@@ -722,26 +823,34 @@ class CimianImporter(Processor):
         item = self._apply_pkgsinfo_overlay(item)
         item = self._apply_generated_defaults(item, item_name)
 
-        # Overlay may replace installer entirely; re-assert required identity fields.
         if not isinstance(item.get("installer"), dict):
             raise ProcessorError("pkgsinfo.installer must be a dict when set")
-        item["installer"].setdefault("type", installer_type)
-        item["installer"].setdefault("location", rel_location)
-        item["installer"].setdefault("hash", package_hash)
-        item["installer"].setdefault("size", size)
+        # Force identity fields from the staged artifact (overlay cannot spoof).
+        item["installer"]["type"] = installer_type
+        item["installer"]["location"] = rel_location
+        item["installer"]["hash"] = package_hash
+        item["installer"]["size"] = size
         self._reject_installer_unresolved(item["installer"])
 
         self._apply_metadata_additions(item)
         self._apply_version_comparison_key(item)
         self._validate_pkgsinfo_keys(item)
 
-        icon_path, icon_filename = self._maybe_extract_icon(source, repo, item_name)
+        overlay_icon = item.get("icon_name")
+        icon_path, icon_filename = self._maybe_extract_icon(
+            source, repo, item_name, preferred_icon_name=overlay_icon
+        )
         if icon_filename:
             item["icon_name"] = icon_filename
             self.env["cimian_icon_path"] = str(icon_path)
             self.env["cimian_icon_name"] = icon_filename
+        elif overlay_icon:
+            safe_overlay_icon = self._safe_icon_filename(overlay_icon)
+            if safe_overlay_icon:
+                item["icon_name"] = safe_overlay_icon
 
         uninstaller_src = str(self.env.get("uninstaller_pathname") or "").strip()
+        un_dest = None
         if uninstaller_src:
             uninstaller_path = Path(uninstaller_src).resolve()
             if not uninstaller_path.is_file():
@@ -753,24 +862,48 @@ class CimianImporter(Processor):
                 f"{pkginfo_subdir}/{item_name}/"
                 f"{item_name}-{version}-uninstall{un_suffix}"
             )
-            un_dest = repo / "pkgs" / un_rel
-            un_dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(uninstaller_path, un_dest)
+            self._validate_repo_rel_location(un_rel, "uninstaller.location")
+            un_dest = self._resolve_under(repo / "pkgs", *Path(un_rel).parts)
             un_type = un_suffix.lstrip(".") or "exe"
             if un_type not in SUPPORTED_INSTALLER_TYPES:
                 un_type = "exe"
             item["uninstaller"] = {
                 "type": un_type,
                 "location": un_rel,
-                "hash": self._sha256(un_dest),
-                "size": un_dest.stat().st_size,
+                # Hash/size filled after copy below.
+                "hash": "",
+                "size": 0,
             }
             item["uninstallable"] = True
-            self.output(f"Copied uninstaller → {un_rel}")
 
-        pkgsinfo_dir.mkdir(parents=True, exist_ok=True)
-        # JSON is a strict subset of YAML; keeps this processor dependency-free.
-        pkgsinfo_path.write_text(json.dumps(item, indent=2) + "\n", encoding="utf-8")
+        package_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(source, package_path)
+            if un_dest is not None:
+                un_dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(Path(uninstaller_src).resolve(), un_dest)
+                item["uninstaller"]["hash"] = self._sha256(un_dest)
+                item["uninstaller"]["size"] = un_dest.stat().st_size
+                self.output(f"Copied uninstaller → {item['uninstaller']['location']}")
+
+            pkgsinfo_dir.mkdir(parents=True, exist_ok=True)
+            # JSON is a strict subset of YAML; keeps this processor dependency-free.
+            pkgsinfo_path.write_text(
+                json.dumps(item, indent=2) + "\n", encoding="utf-8"
+            )
+        except Exception:
+            # Roll back staged artifacts if metadata write fails mid-import.
+            if package_path.is_file():
+                try:
+                    package_path.unlink()
+                except OSError:
+                    pass
+            if un_dest is not None and un_dest.is_file():
+                try:
+                    un_dest.unlink()
+                except OSError:
+                    pass
+            raise
 
         self.env["cimian_pkgsinfo_path"] = str(pkgsinfo_path)
         self.env["cimian_package_path"] = str(package_path)
