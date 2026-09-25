@@ -18,24 +18,22 @@ This is the Windows counterpart to AutoPkg core’s `MunkiImporter`. Behaviors m
 | Payload | macOS pkg/dmg inspected by `makepkginfo` | Recipe-declared `exe` / `msi` / `msix` / `nupkg` / `ps1` / `script` / `nopkg` |
 | Metadata | Generated, then any `pkginfo` key overlaid | Built from recipe inputs, then optional `pkgsinfo` dict deeply overlaid |
 | Install identity | Receipts / installs discovered from the payload | Recipe `pkgsinfo` overlay for `installs`, scripts, `requires`, etc.; for MSI, `ProductCode` / `UpgradeCode` read via `msiinfo` when unset |
-| Already imported | Skip on installer hash, app version, receipt, or file checksum (same arch) | Skip when the pkgsinfo path already has the same `name`, `version`, and installer `hash` (and matching `supported_architectures` when present). Use `force_cimianimport` to override |
+| Already imported | Skip on installer hash, app version, receipt, or file checksum (same arch) | Skip when any pkgsinfo already has the same installer `hash` (and matching `supported_architectures` when present). Use `force_cimianimport` to override |
 | Run summary | `munki_importer_summary_result` + `munki_repo_changed` | `cimian_importer_summary_result` + `cimian_repo_changed` |
 | Icons | munkilib extract/reuse (macOS; needs Munki tools) | `CimianIconExtractor` (PE / MSI / MSIX / nupkg on Linux); reuses `icons/<name>.png` when present |
-| Extra copy | Optional uninstaller pkg | Optional S3 upload (`upload_s3` / `CIMIAN_UPLOAD_S3`) with head-object check |
-| Catalog rebuild | Not part of import (`makecatalogs` later) | Not part of import (Cimian / gitops rebuild later) |
+| Extra copy | Optional uninstaller pkg | Optional `uninstaller_pathname` copied into `pkgs/`; optional S3 upload (`upload_s3` / `CIMIAN_UPLOAD_S3`) |
+| Catalog rebuild | Not part of import (`makecatalogs` later) | Not part of import (Cimian catalog rebuild / gitops later) |
 | Silent install | Munki pkginfo keys | `installer.flags`, `installer.switches`, `installer.args` (unprefixed), `installer.subcommand` |
 | Hash check | From makepkginfo | Optional `expected_sha256` before staging |
 
-## Optional pipeline-local inputs
+## Optional inputs
 
-These are safe for any consumer but are not required for third-party use:
-
-- `manifest_assignment` — autopromote metadata recorded in pkgsinfo
-- `upload_s3` / `s3_bucket` / `CIMIAN_S3_BUCKET` / `GORILLA_S3_BUCKET` — package and icon upload
+- `pkgsinfo` — overlay dict (same idea as a `.munki` recipe’s `pkginfo`)
+- `manifest_assignment` — optional pkgsinfo metadata (also via `pkgsinfo` overlay)
+- `upload_s3` / `s3_bucket` / `CIMIAN_S3_BUCKET` — optional package and icon upload
+- `uninstaller_pathname` — optional uninstaller to stage under `pkgs/`
 
 ## Recipe `pkgsinfo` overlay
-
-Same idea as a `.munki` recipe’s `pkginfo` dict. Example:
 
 ```xml
 <key>pkgsinfo</key>

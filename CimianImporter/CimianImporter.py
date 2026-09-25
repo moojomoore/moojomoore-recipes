@@ -229,16 +229,16 @@ class CimianImporter(Processor):
             "required": False,
             "default": False,
             "description": (
-                "When true, import even if name/version/hash already match an "
-                "existing pkgsinfo (mirrors force_munkiimport)."
+                "When true, import even if an existing pkgsinfo already has the "
+                "same installer hash (mirrors force_munkiimport)."
             ),
         },
         "manifest_assignment": {
             "required": False,
             "description": (
-                "Optional dict recorded under pkgsinfo for autopromote "
+                "Optional dict recorded under pkgsinfo "
                 "(e.g. managed_installs / managed_updates / optional_installs). "
-                "Pipeline-local; not required for third-party use."
+                "May also be supplied via the pkgsinfo overlay."
             ),
         },
         "upload_s3": {
@@ -246,15 +246,18 @@ class CimianImporter(Processor):
             "default": False,
             "description": (
                 "When true, upload pkgs/<rel_location> (and icons/) to S3. "
-                "Also enabled when env CIMIAN_UPLOAD_S3 is truthy. "
-                "Pipeline-local; not required for third-party use."
+                "Also enabled when env CIMIAN_UPLOAD_S3 is truthy."
             ),
         },
         "s3_bucket": {
             "required": False,
+            "description": "Destination bucket. Defaults to CIMIAN_S3_BUCKET.",
+        },
+        "uninstaller_pathname": {
+            "required": False,
             "description": (
-                "Destination bucket. Defaults to CIMIAN_S3_BUCKET, then "
-                "GORILLA_S3_BUCKET (lab). Pipeline-local."
+                "Optional path to an uninstaller to copy into pkgs/ beside the "
+                "installer (MunkiImporter uninstaller_pkg_path counterpart)."
             ),
         },
         "extract_icon": {
@@ -349,9 +352,8 @@ class CimianImporter(Processor):
         for candidate in (
             str(self.env.get("s3_bucket") or "").strip(),
             os.environ.get("CIMIAN_S3_BUCKET", "").strip(),
-            os.environ.get("GORILLA_S3_BUCKET", "").strip(),
         ):
-            # GitLab leaves unset CI vars as the literal "$NAME".
+            # Ignore unset shell-style sentinels like "$CIMIAN_S3_BUCKET".
             if candidate and not candidate.startswith("$"):
                 return candidate
         return ""
@@ -361,7 +363,7 @@ class CimianImporter(Processor):
         if not bucket:
             raise ProcessorError(
                 "upload_s3 requested but no bucket set "
-                "(s3_bucket / CIMIAN_S3_BUCKET / GORILLA_S3_BUCKET)"
+                "(s3_bucket / CIMIAN_S3_BUCKET)"
             )
         try:
             import boto3
@@ -406,8 +408,40 @@ class CimianImporter(Processor):
         data = yaml.safe_load(text)
         return data if isinstance(data, dict) else None
 
+    def _arch_compatible(self, existing_arch, architectures):
+        if existing_arch is None:
+            return True
+        return self._as_list(existing_arch) == list(architectures)
+
+    def _find_matching_pkginfo(self, repo, package_hash, architectures):
+        """Find an existing pkgsinfo with the same installer hash (Munki-like).
+
+        Returns (pkgsinfo_path, item_dict) or (None, None).
+        """
+        pkgsinfo_root = repo / "pkgsinfo"
+        if not pkgsinfo_root.is_dir():
+            return None, None
+        needle = package_hash.lower()
+        for path in sorted(pkgsinfo_root.rglob("*")):
+            if path.suffix.lower() not in {".yaml", ".yml", ".json"}:
+                continue
+            existing = self._load_pkgsinfo(path)
+            if not existing:
+                continue
+            installer = existing.get("installer") or {}
+            if not isinstance(installer, dict):
+                continue
+            if str(installer.get("hash") or "").lower() != needle:
+                continue
+            if not self._arch_compatible(
+                existing.get("supported_architectures"), architectures
+            ):
+                continue
+            return path, existing
+        return None, None
+
     def _existing_match(self, pkgsinfo_path, item_name, version, package_hash, architectures):
-        """Return True when repo already has the same name/version/hash (/arch)."""
+        """Return True when the expected pkgsinfo path already matches."""
         if not pkgsinfo_path.is_file():
             return False
         existing = self._load_pkgsinfo(pkgsinfo_path)
@@ -422,11 +456,9 @@ class CimianImporter(Processor):
             return False
         if str(installer.get("hash") or "").lower() != package_hash.lower():
             return False
-        existing_arch = existing.get("supported_architectures")
-        if existing_arch is not None:
-            if self._as_list(existing_arch) != list(architectures):
-                return False
-        return True
+        return self._arch_compatible(
+            existing.get("supported_architectures"), architectures
+        )
 
     def _read_msi_identity(self, source):
         """Return (product_code, upgrade_code) from MSI Property table, or (None, None)."""
@@ -617,15 +649,29 @@ class CimianImporter(Processor):
         pkgsinfo_path = pkgsinfo_dir / f"{item_name}-{version}.yaml"
 
         force = self._env_bool("force_cimianimport", False)
-        if not force and self._existing_match(
-            pkgsinfo_path, item_name, version, package_hash, architectures
-        ):
-            self.output(
-                f"Item {item_name} {version} already exists in the Cimian repo "
-                f"as pkgs/{rel_location} (matching hash)."
+        if not force:
+            matched_path, matched_item = self._find_matching_pkginfo(
+                repo, package_hash, architectures
             )
-            self._set_skip_outputs(pkgsinfo_path, package_path, rel_location, package_hash)
-            return
+            path_match = self._existing_match(
+                pkgsinfo_path, item_name, version, package_hash, architectures
+            )
+            if matched_path is not None or path_match:
+                existing = matched_item or self._load_pkgsinfo(pkgsinfo_path) or {}
+                existing_installer = existing.get("installer") or {}
+                existing_rel = str(
+                    existing_installer.get("location") or rel_location
+                )
+                existing_pkg = repo / "pkgs" / existing_rel
+                existing_info = matched_path or pkgsinfo_path
+                self.output(
+                    f"Item already exists in the Cimian repo as pkgs/{existing_rel} "
+                    f"(matching installer hash)."
+                )
+                self._set_skip_outputs(
+                    existing_info, existing_pkg, existing_rel, package_hash
+                )
+                return
 
         package_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, package_path)
@@ -643,7 +689,7 @@ class CimianImporter(Processor):
         switches = self._as_list(self.env.get("installer_switches"))
         args = self._as_list(self.env.get("installer_args"))
         subcommand = str(self.env.get("installer_subcommand") or "").strip()
-        # Reject leftover %VAR% so a missing CI secret cannot be written into pkgsinfo.
+        # Reject leftover %VAR% so unresolved recipe substitutions are not written.
         self._reject_unresolved(flags, "installer_flags")
         self._reject_unresolved(switches, "installer_switches")
         self._reject_unresolved(args, "installer_args")
@@ -710,6 +756,33 @@ class CimianImporter(Processor):
             item["icon_name"] = icon_filename
             self.env["cimian_icon_path"] = str(icon_path)
             self.env["cimian_icon_name"] = icon_filename
+
+        uninstaller_src = str(self.env.get("uninstaller_pathname") or "").strip()
+        if uninstaller_src:
+            uninstaller_path = Path(uninstaller_src).resolve()
+            if not uninstaller_path.is_file():
+                raise ProcessorError(
+                    f"uninstaller_pathname does not exist: {uninstaller_path}"
+                )
+            un_suffix = uninstaller_path.suffix.lower() or ".exe"
+            un_rel = (
+                f"{pkginfo_subdir}/{item_name}/"
+                f"{item_name}-{version}-uninstall{un_suffix}"
+            )
+            un_dest = repo / "pkgs" / un_rel
+            un_dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(uninstaller_path, un_dest)
+            un_type = un_suffix.lstrip(".") or "exe"
+            if un_type not in SUPPORTED_INSTALLER_TYPES:
+                un_type = "exe"
+            item["uninstaller"] = {
+                "type": un_type,
+                "location": un_rel,
+                "hash": self._sha256(un_dest),
+                "size": un_dest.stat().st_size,
+            }
+            item["uninstallable"] = True
+            self.output(f"Copied uninstaller → {un_rel}")
 
         pkgsinfo_dir.mkdir(parents=True, exist_ok=True)
         # JSON is a strict subset of YAML; keeps this processor dependency-free.
