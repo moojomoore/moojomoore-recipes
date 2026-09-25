@@ -17,8 +17,8 @@ This is the Windows counterpart to AutoPkg core’s `MunkiImporter`. Behaviors m
 | --- | --- | --- |
 | Payload | macOS pkg/dmg inspected by `makepkginfo` | Recipe-declared `exe` / `msi` / `msix` / `nupkg` / `ps1` / `script` / `nopkg` |
 | Metadata | Generated, then any `pkginfo` key overlaid | Built from structural inputs, then optional `pkgsinfo` dict deeply overlaid |
-| Install identity | Receipts / installs discovered from the payload | Recipe `pkgsinfo` overlay for `installs`, scripts, `requires`, etc.; for MSI, `ProductCode` / `UpgradeCode` read via `msiinfo` when unset |
-| Already imported | Skip on installer hash, app version, receipt, or file checksum (same arch) | Skip when any pkgsinfo already has the same installer `hash` (and matching `supported_architectures` when present). Use `force_cimianimport` to override |
+| Install identity | Receipts / installs discovered from the payload | Recipe `pkgsinfo` overlay for `installs`, scripts, `requires`, etc. |
+| Already imported | Skip on installer hash, app version, receipt, or file checksum (same arch); does not require `pkgs/` on disk | Skip when any pkgsinfo already has the same installer `hash` (and matching `supported_architectures` when present); does not require `pkgs/` on disk. Use `force_cimianimport` to override |
 | Run summary | `munki_importer_summary_result` + `munki_repo_changed` | `cimian_importer_summary_result` + `cimian_repo_changed` |
 | Icons | munkilib extract/reuse (macOS; needs Munki tools) | `CimianIconExtractor` (PE / MSI / MSIX / nupkg on Linux); reuses `icons/<name>.png` when present |
 | Extra copy | Optional uninstaller pkg | Optional `uninstaller_pathname` copied into `pkgs/` |
@@ -44,7 +44,7 @@ Same role as MunkiImporter’s `pkg_path` / `MUNKI_REPO` / `repo_subdirectory`:
 - `pathname`, `cimian_repo`, `version`, `installer_type` (required)
 - `item_name` / `NAME`, `pkginfo_subdir`
 - `pkgsinfo`, `force_cimianimport`, `extract_icon`, `icon_name`
-- `uninstaller_pathname`, `msiinfo_path`
+- `uninstaller_pathname`
 - `cimianimport_pkgname`, `cimianimport_appname`
 - `metadata_additions`, `version_comparison_key`, `CIMIAN_PKGSINFO_FILE_EXTENSION`
 
@@ -71,8 +71,6 @@ Put catalogs, category, developer, description, display_name, unattended_*, supp
   <dict>
     <key>flags</key>
     <array><string>quiet</string></array>
-    <key>product_code</key>
-    <string>{YOUR-PRODUCT-CODE}</string>
     <key>success_codes</key>
     <array><integer>0</integer><integer>3010</integer></array>
   </dict>
@@ -87,10 +85,6 @@ Put catalogs, category, developer, description, display_name, unattended_*, supp
 Unknown top-level or installer keys raise `ProcessorError`.
 
 When omitted after overlay, defaults are: `catalogs=["import"]`, `supported_architectures=["x64"]`, `unattended_install` / `unattended_uninstall` = true, `display_name` = `cimianimport_appname` or `item_name`.
-
-## MSI identity
-
-When `installer_type` is `msi` and the overlay does not supply codes, the processor runs `msiinfo export <file> Property` (or `msiinfo_path`) and writes `installer.product_code` / `installer.upgrade_code`. Missing `msiinfo` logs and continues without codes.
 
 ## Stub identifier
 

@@ -12,7 +12,6 @@ import hashlib
 import json
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 from autopkglib import Processor, ProcessorError
@@ -90,8 +89,6 @@ VALID_INSTALLER_KEYS = {
     "arguments",
     "args",
     "temp_dir",
-    "product_code",
-    "upgrade_code",
     "installer_item_location",
     "success_codes",
     "identity_name",
@@ -190,13 +187,6 @@ class CimianImporter(Processor):
             "description": (
                 "Optional icon filename override (e.g. GoogleChrome.png). "
                 "Defaults to <item_name>.png when extraction succeeds."
-            ),
-        },
-        "msiinfo_path": {
-            "required": False,
-            "description": (
-                "Optional path to msiinfo for MSI ProductCode/UpgradeCode "
-                "extraction. Defaults to msiinfo on PATH."
             ),
         },
         "cimianimport_pkgname": {
@@ -390,39 +380,6 @@ class CimianImporter(Processor):
         return self._arch_compatible(
             existing.get("supported_architectures"), architectures
         )
-
-    def _read_msi_identity(self, source):
-        """Return (product_code, upgrade_code) from MSI Property table, or (None, None)."""
-        requested = str(self.env.get("msiinfo_path") or "").strip()
-        msiinfo = requested or shutil.which("msiinfo")
-        if not msiinfo:
-            self.output(
-                "msiinfo not found; skipping MSI ProductCode/UpgradeCode extraction"
-            )
-            return None, None
-        try:
-            completed = subprocess.run(
-                [msiinfo, "export", str(source), "Property"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except (OSError, subprocess.CalledProcessError) as error:
-            self.output(f"Unable to read MSI Property table: {error}")
-            return None, None
-
-        properties = {}
-        for line in completed.stdout.splitlines():
-            fields = line.rstrip("\r").split("\t", 1)
-            if len(fields) == 2 and fields[0] in ("ProductCode", "UpgradeCode"):
-                properties[fields[0]] = fields[1].strip()
-        product_code = properties.get("ProductCode") or None
-        upgrade_code = properties.get("UpgradeCode") or None
-        if product_code or upgrade_code:
-            self.output(
-                f"MSI identity ProductCode={product_code} UpgradeCode={upgrade_code}"
-            )
-        return product_code, upgrade_code
 
     @staticmethod
     def _validate_single_subdir(subdir, label="pkginfo_subdir"):
@@ -632,17 +589,6 @@ class CimianImporter(Processor):
         self.output(f"Extracted icon → {icon_path}")
         return icon_path, icon_filename
 
-    def _staged_pkg_is_intact(self, repo, rel_location, package_hash):
-        """Return True when pkgs/rel_location exists and matches *package_hash*."""
-        try:
-            rel = self._validate_repo_rel_location(rel_location)
-            existing_pkg = self._resolve_under(repo / "pkgs", *Path(rel).parts)
-        except ProcessorError:
-            return False
-        if not existing_pkg.is_file():
-            return False
-        return self._sha256(existing_pkg).lower() == str(package_hash).lower()
-
     def _clear_summary(self):
         if "cimian_importer_summary_result" in self.env:
             del self.env["cimian_importer_summary_result"]
@@ -765,30 +711,31 @@ class CimianImporter(Processor):
                 pkgsinfo_path, item_name, version, package_hash, architectures
             )
             if matched_path is not None or path_match:
+                # Match MunkiImporter: hash (+ arch) match skips import entirely.
+                # Do not rewrite pkgsinfo when pkgs/ is missing (common in CI
+                # where binaries live in object storage, not the git checkout).
                 existing = matched_item or self._load_pkgsinfo(pkgsinfo_path) or {}
                 existing_installer = existing.get("installer") or {}
                 existing_rel = str(
                     existing_installer.get("location") or rel_location
                 )
-                if self._staged_pkg_is_intact(repo, existing_rel, package_hash):
+                try:
+                    existing_rel = self._validate_repo_rel_location(existing_rel)
                     existing_pkg = self._resolve_under(
-                        repo / "pkgs", *Path(
-                            self._validate_repo_rel_location(existing_rel)
-                        ).parts
+                        repo / "pkgs", *Path(existing_rel).parts
                     )
-                    existing_info = matched_path or pkgsinfo_path
-                    self.output(
-                        f"Item already exists in the Cimian repo as "
-                        f"pkgs/{existing_rel} (matching installer hash)."
-                    )
-                    self._set_skip_outputs(
-                        existing_info, existing_pkg, existing_rel, package_hash
-                    )
-                    return
+                except ProcessorError:
+                    existing_rel = rel_location
+                    existing_pkg = package_path
+                existing_info = matched_path or pkgsinfo_path
                 self.output(
-                    f"Matching pkgsinfo hash found but pkgs/{existing_rel} is "
-                    f"missing or corrupt; re-importing."
+                    f"Item already exists in the Cimian repo as "
+                    f"pkgs/{existing_rel} (matching installer hash)."
                 )
+                self._set_skip_outputs(
+                    existing_info, existing_pkg, existing_rel, package_hash
+                )
+                return
 
         # Build and validate pkgsinfo before staging so a failed validation
         # cannot leave an orphan installer under pkgs/.
@@ -800,14 +747,6 @@ class CimianImporter(Processor):
             "hash": package_hash,
             "size": size,
         }
-
-        # MSI identity: recipe/overlay wins; otherwise read from the payload.
-        if installer_type == "msi":
-            product_code, upgrade_code = self._read_msi_identity(source)
-            if product_code:
-                installer["product_code"] = product_code
-            if upgrade_code:
-                installer["upgrade_code"] = upgrade_code
 
         appname = str(self.env.get("cimianimport_appname") or "").strip()
         display_name = appname or item_name
