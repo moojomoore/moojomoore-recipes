@@ -10,6 +10,7 @@ from __future__ import absolute_import
 import copy
 import hashlib
 import json
+from datetime import datetime, timezone
 import re
 import shutil
 from pathlib import Path
@@ -435,17 +436,24 @@ class CimianImporter(Processor):
         return filename
 
     def _validate_pkgsinfo_keys(self, item):
+        """Warn on unknown keys (MunkiImporter passes overlay keys through).
+
+        Still reject structurally unsafe values (path traversal in temp_dir /
+        icon_name). Schema lint remains the hard gate in CI.
+        """
         unknown = sorted(set(item) - VALID_TOP_KEYS)
         if unknown:
-            raise ProcessorError(
-                "Unknown pkgsinfo top-level key(s): " + ", ".join(unknown)
+            self.output(
+                "WARNING: Unknown pkgsinfo top-level key(s) passed through: "
+                + ", ".join(unknown)
             )
         installer = item.get("installer")
         if isinstance(installer, dict):
             bad = sorted(set(installer) - VALID_INSTALLER_KEYS)
             if bad:
-                raise ProcessorError(
-                    "Unknown installer key(s): " + ", ".join(bad)
+                self.output(
+                    "WARNING: Unknown installer key(s) passed through: "
+                    + ", ".join(bad)
                 )
             # location/hash/size are forced from the staged artifact in main();
             # do not reject overlay values here (they are overwritten).
@@ -526,6 +534,78 @@ class CimianImporter(Processor):
         if not isinstance(metadata, dict):
             raise ProcessorError("pkgsinfo._metadata must be a dict when set")
         metadata.update(additions)
+
+    @staticmethod
+    def _iso8601_z(value):
+        """Normalize a date-like value to ``YYYY-MM-DDTHH:MM:SSZ`` string.
+
+        Estate Cimian pkgsinfo and cimian_autopromote use this form. Dumping a
+        datetime via PyYAML emits ``YYYY-MM-DD HH:MM:SS+00:00``, which diverges
+        from that convention. Public Cimian source has no dedicated parser for
+        this field; keep the estate string form.
+        """
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            else:
+                value = value.astimezone(timezone.utc)
+            return value.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.endswith("Z") and "T" in text:
+            try:
+                datetime.strptime(text[:-1], "%Y-%m-%dT%H:%M:%S")
+                return text
+            except ValueError:
+                pass
+        # Normalize common variants to something fromisoformat can read.
+        candidate = text
+        if candidate.endswith("Z"):
+            candidate = candidate[:-1] + "+00:00"
+        candidate = candidate.replace(" ", "T", 1)
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError:
+            return text
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return (
+            parsed.astimezone(timezone.utc)
+            .replace(microsecond=0)
+            .strftime("%Y-%m-%dT%H:%M:%SZ")
+        )
+
+    def _stamp_creation_date(self, item):
+        """Set _metadata.creation_date on first import (munkiimport parity)."""
+        metadata = item.setdefault("_metadata", {})
+        if not isinstance(metadata, dict):
+            raise ProcessorError("pkgsinfo._metadata must be a dict when set")
+        if metadata.get("creation_date") not in (None, ""):
+            # Normalize overlay / metadata_additions values to estate form.
+            metadata["creation_date"] = self._iso8601_z(metadata["creation_date"])
+            return
+        metadata["creation_date"] = datetime.now(tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+    def _normalize_force_install_after_date(self, item):
+        """Keep force_install_after_date as ISO8601 Z string when present."""
+        if "force_install_after_date" not in item:
+            return
+        value = item.get("force_install_after_date")
+        if value in (None, ""):
+            item.pop("force_install_after_date", None)
+            return
+        # MunkiImporter parses Z strings to datetime for plist; for Cimian YAML
+        # we must emit the estate string form (see _iso8601_z).
+        normalized = self._iso8601_z(value)
+        if normalized is None:
+            item.pop("force_install_after_date", None)
+            return
+        item["force_install_after_date"] = normalized
 
     def _maybe_extract_icon(self, source, repo, item_name, preferred_icon_name=None):
         """Extract or reuse icon; return (icon_path, icon_name) or (None, None).
@@ -775,6 +855,8 @@ class CimianImporter(Processor):
         self._reject_installer_unresolved(item["installer"])
 
         self._apply_metadata_additions(item)
+        self._stamp_creation_date(item)
+        self._normalize_force_install_after_date(item)
         self._apply_version_comparison_key(item)
         self._validate_pkgsinfo_keys(item)
 
