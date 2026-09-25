@@ -297,7 +297,7 @@ class CimianImporter(Processor):
 
     @staticmethod
     def _load_pkgsinfo(path):
-        """Load pkgsinfo written as JSON-in-YAML (or dict-shaped YAML)."""
+        """Load pkgsinfo YAML (JSON still accepted for older staged files)."""
         text = path.read_text(encoding="utf-8")
         try:
             data = json.loads(text)
@@ -311,6 +311,23 @@ class CimianImporter(Processor):
             return None
         data = yaml.safe_load(text)
         return data if isinstance(data, dict) else None
+
+    @staticmethod
+    def _dump_pkgsinfo(item):
+        """Serialize pkgsinfo as block-style YAML (Cimian gitops convention)."""
+        try:
+            import yaml
+        except ImportError as err:
+            raise ProcessorError(
+                "PyYAML is required to write Cimian pkgsinfo (.yaml). "
+                "Install with: pip install pyyaml"
+            ) from err
+        return yaml.safe_dump(
+            item,
+            sort_keys=False,
+            default_flow_style=False,
+            allow_unicode=True,
+        )
 
     def _pkgsinfo_overlay(self):
         overlay = self.env.get("pkgsinfo")
@@ -873,10 +890,7 @@ class CimianImporter(Processor):
                 self.output(f"Copied uninstaller → {item['uninstaller']['location']}")
 
             pkgsinfo_dir.mkdir(parents=True, exist_ok=True)
-            # JSON is a strict subset of YAML; keeps this processor dependency-free.
-            pkgsinfo_path.write_text(
-                json.dumps(item, indent=2) + "\n", encoding="utf-8"
-            )
+            pkgsinfo_path.write_text(self._dump_pkgsinfo(item), encoding="utf-8")
         except Exception:
             # Roll back staged artifacts if metadata write fails mid-import.
             if package_path.is_file():
