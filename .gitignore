@@ -2,3 +2,4 @@ downloads/
 *.dmg
 *.pkg
 *.zip
+__pycache__/
