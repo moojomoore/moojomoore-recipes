@@ -16,7 +16,7 @@ This is the Windows counterpart to AutoPkg core’s `MunkiImporter`. Behaviors m
 | Area | MunkiImporter | CimianImporter |
 | --- | --- | --- |
 | Payload | macOS pkg/dmg inspected by `makepkginfo` | Recipe-declared `exe` / `msi` / `msix` / `nupkg` / `ps1` / `script` / `nopkg` |
-| Metadata | Generated, then any `pkginfo` key overlaid | Built from recipe inputs, then optional `pkgsinfo` dict deeply overlaid |
+| Metadata | Generated, then any `pkginfo` key overlaid | Built from structural inputs, then optional `pkgsinfo` dict deeply overlaid |
 | Install identity | Receipts / installs discovered from the payload | Recipe `pkgsinfo` overlay for `installs`, scripts, `requires`, etc.; for MSI, `ProductCode` / `UpgradeCode` read via `msiinfo` when unset |
 | Already imported | Skip on installer hash, app version, receipt, or file checksum (same arch) | Skip when any pkgsinfo already has the same installer `hash` (and matching `supported_architectures` when present). Use `force_cimianimport` to override |
 | Run summary | `munki_importer_summary_result` + `munki_repo_changed` | `cimian_importer_summary_result` + `cimian_repo_changed` |
@@ -24,35 +24,69 @@ This is the Windows counterpart to AutoPkg core’s `MunkiImporter`. Behaviors m
 | Extra copy | Optional uninstaller pkg | Optional `uninstaller_pathname` copied into `pkgs/` |
 | Object store | Not part of import (repo plugins or a later sync) | Not part of import (stage locally; sync separately if needed) |
 | Catalog rebuild | Not part of import (`makecatalogs` later) | Not part of import (Cimian catalog rebuild / gitops later) |
-| Silent install | Munki pkginfo keys | `installer.flags`, `installer.switches`, `installer.args` (unprefixed), `installer.subcommand` |
-| Hash check | From makepkginfo | Optional `expected_sha256` before staging |
+| Silent install | Munki pkginfo keys | `pkgsinfo.installer.flags` / `switches` / `args` / `subcommand` |
+| Hash check | From makepkginfo / other processors | Not part of import (use a download/verify processor upstream) |
+| File extension | `MUNKI_PKGINFO_FILE_EXTENSION` (default `plist`) | `CIMIAN_PKGSINFO_FILE_EXTENSION` (default `yaml`) |
+| `_metadata` merge | `metadata_additions` | `metadata_additions` |
+| Installs version key | `version_comparison_key` | `version_comparison_key` |
+| Staged basename | `munkiimport_pkgname` | `cimianimport_pkgname` |
+| Display-name hint | `munkiimport_appname` (payload scan) | `cimianimport_appname` (default `display_name` only; no payload scan) |
 
-## Optional inputs
+### Not applicable on Cimian
 
-- `pkgsinfo` — overlay dict (same idea as a `.munki` recipe’s `pkginfo`)
-- `manifest_assignment` — optional pkgsinfo metadata (also via `pkgsinfo` overlay)
-- `uninstaller_pathname` — optional uninstaller to stage under `pkgs/`
+- `additional_makepkginfo_options` — no `makepkginfo`
+- `MUNKI_REPO_PLUGIN` / `MUNKILIB_DIR` / `force_munki_repo_lib` — filesystem repo only
+
+## Structural inputs
+
+Same role as MunkiImporter’s `pkg_path` / `MUNKI_REPO` / `repo_subdirectory`:
+
+- `pathname`, `cimian_repo`, `version`, `installer_type` (required)
+- `item_name` / `NAME`, `pkginfo_subdir`
+- `pkgsinfo`, `force_cimianimport`, `extract_icon`, `icon_name`
+- `uninstaller_pathname`, `msiinfo_path`
+- `cimianimport_pkgname`, `cimianimport_appname`
+- `metadata_additions`, `version_comparison_key`, `CIMIAN_PKGSINFO_FILE_EXTENSION`
 
 ## Recipe `pkgsinfo` overlay
+
+Put catalogs, category, developer, description, display_name, unattended_*, supported_architectures, manifest_assignment, and installer silent-install keys here — the same place a `.munki` recipe puts them under `pkginfo`:
 
 ```xml
 <key>pkgsinfo</key>
 <dict>
+  <key>catalogs</key>
+  <array><string>import</string></array>
+  <key>category</key>
+  <string>Browsers</string>
+  <key>developer</key>
+  <string>Google</string>
+  <key>display_name</key>
+  <string>Google Chrome</string>
+  <key>supported_architectures</key>
+  <array><string>x64</string></array>
   <key>blocking_applications</key>
   <array><string>chrome.exe</string></array>
   <key>installer</key>
   <dict>
+    <key>flags</key>
+    <array><string>quiet</string></array>
     <key>product_code</key>
     <string>{YOUR-PRODUCT-CODE}</string>
     <key>success_codes</key>
     <array><integer>0</integer><integer>3010</integer></array>
   </dict>
-  <key>installcheck_script</key>
-  <string>...</string>
+  <key>manifest_assignment</key>
+  <dict>
+    <key>managed_installs</key>
+    <array><string>import</string><string>release</string></array>
+  </dict>
 </dict>
 ```
 
 Unknown top-level or installer keys raise `ProcessorError`.
+
+When omitted after overlay, defaults are: `catalogs=["import"]`, `supported_architectures=["x64"]`, `unattended_install` / `unattended_uninstall` = true, `display_name` = `cimianimport_appname` or `item_name`.
 
 ## MSI identity
 

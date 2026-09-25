@@ -150,79 +150,30 @@ class CimianImporter(Processor):
             "required": False,
             "description": "Stable Cimian package name (pkgsinfo name).",
         },
-        "display_name": {
-            "required": False,
-            "description": "User-facing display name; defaults to item_name.",
-        },
         "version": {"required": True, "description": "Package version string."},
-        "catalogs": {
-            "required": False,
-            "default": ["import"],
-            "description": "Cimian catalogs list (default: import).",
-        },
         "installer_type": {
             "required": True,
             "description": "Cimian installer type (msi, exe, msix, ...).",
         },
-        "supported_architectures": {
-            "required": False,
-            "default": ["x64"],
-            "description": "supported_architectures list.",
-        },
         "pkginfo_subdir": {
             "required": False,
             "default": "apps",
-            "description": "Directory under pkgsinfo/ and pkgs/ (e.g. apps).",
-        },
-        "expected_sha256": {
-            "required": False,
-            "description": "Optional reviewed SHA-256 for the downloaded installer.",
-        },
-        "developer": {"required": False, "description": "Optional developer string."},
-        "category": {"required": False, "description": "Optional category string."},
-        "description": {
-            "required": False,
-            "description": "Optional pkgsinfo description.",
+            "description": (
+                "The subdirectory under pkgs to which the item will be copied, "
+                "and under pkgsinfo where the pkgsinfo will be created "
+                "(MunkiImporter repo_subdirectory counterpart)."
+            ),
         },
         "pkgsinfo": {
             "required": False,
             "description": (
                 "Optional dict of pkgsinfo keys to overlay onto the generated "
                 "item (MunkiImporter pkginfo equivalent). Nested installer keys "
-                "are deep-merged. Unknown top-level keys raise ProcessorError."
+                "are deep-merged. Unknown top-level keys raise ProcessorError. "
+                "Put catalogs, category, developer, description, display_name, "
+                "unattended_*, supported_architectures, manifest_assignment, and "
+                "installer.flags/switches/args/subcommand here."
             ),
-        },
-        "installer_flags": {
-            "required": False,
-            "default": [],
-            "description": "Optional installer.flags list. Cimian prefixes each with --.",
-        },
-        "installer_switches": {
-            "required": False,
-            "default": [],
-            "description": "Optional installer.switches list. Cimian prefixes each with /.",
-        },
-        "installer_args": {
-            "required": False,
-            "default": [],
-            "description": (
-                "Optional installer.args list, passed through without a prefix. "
-                "Use this for values such as CID=... that must not become flags."
-            ),
-        },
-        "installer_subcommand": {
-            "required": False,
-            "description": "Optional installer.subcommand placed before switches.",
-        },
-        "unattended_install": {
-            "required": False,
-            "default": True,
-            "description": "pkgsinfo unattended_install.",
-        },
-        "unattended_uninstall": {
-            "required": False,
-            "default": True,
-            "description": "pkgsinfo unattended_uninstall.",
         },
         "force_cimianimport": {
             "required": False,
@@ -230,14 +181,6 @@ class CimianImporter(Processor):
             "description": (
                 "When true, import even if an existing pkgsinfo already has the "
                 "same installer hash (mirrors force_munkiimport)."
-            ),
-        },
-        "manifest_assignment": {
-            "required": False,
-            "description": (
-                "Optional dict recorded under pkgsinfo "
-                "(e.g. managed_installs / managed_updates / optional_installs). "
-                "May also be supplied via the pkgsinfo overlay."
             ),
         },
         "uninstaller_pathname": {
@@ -252,9 +195,8 @@ class CimianImporter(Processor):
             "default": True,
             "description": (
                 "Extract a product icon into cimian/icons/<item_name>.png "
-                "(Linux-friendly; mirrors AutoPkg Munki extract_icon / "
-                "cimiimport IconExtractor). Reuses an existing icon when present. "
-                "Failures are non-fatal."
+                "(Linux-friendly; mirrors AutoPkg Munki extract_icon). "
+                "Reuses an existing icon when present. Failures are non-fatal."
             ),
         },
         "icon_name": {
@@ -269,6 +211,45 @@ class CimianImporter(Processor):
             "description": (
                 "Optional path to msiinfo for MSI ProductCode/UpgradeCode "
                 "extraction. Defaults to msiinfo on PATH."
+            ),
+        },
+        "cimianimport_pkgname": {
+            "required": False,
+            "description": (
+                "Optional staged installer basename under pkgs/ "
+                "(MunkiImporter munkiimport_pkgname / --pkgname counterpart). "
+                "When omitted, defaults to <item_name>-<version><suffix>."
+            ),
+        },
+        "cimianimport_appname": {
+            "required": False,
+            "description": (
+                "Optional default display_name before the pkgsinfo overlay "
+                "(weak Cimian stand-in for munkiimport_appname / --appname; "
+                "no payload scan). Overlay display_name wins when set."
+            ),
+        },
+        "version_comparison_key": {
+            "required": False,
+            "description": (
+                "String to set 'version_comparison_key' for any installs items "
+                "(same behavior as MunkiImporter)."
+            ),
+        },
+        "metadata_additions": {
+            "required": False,
+            "description": (
+                "A dictionary that will be merged with the pkgsinfo _metadata. "
+                "Unique keys will be added, but overlapping keys will replace "
+                "existing values (MunkiImporter metadata_additions counterpart)."
+            ),
+        },
+        "CIMIAN_PKGSINFO_FILE_EXTENSION": {
+            "required": False,
+            "default": "yaml",
+            "description": (
+                "Extension for output pkgsinfo files. Default is 'yaml' "
+                "(MunkiImporter MUNKI_PKGINFO_FILE_EXTENSION counterpart)."
             ),
         },
     }
@@ -345,6 +326,14 @@ class CimianImporter(Processor):
         data = yaml.safe_load(text)
         return data if isinstance(data, dict) else None
 
+    def _pkgsinfo_overlay(self):
+        overlay = self.env.get("pkgsinfo")
+        if not overlay:
+            return {}
+        if not isinstance(overlay, dict):
+            raise ProcessorError("pkgsinfo must be a dict when set")
+        return overlay
+
     def _arch_compatible(self, existing_arch, architectures):
         if existing_arch is None:
             return True
@@ -360,7 +349,9 @@ class CimianImporter(Processor):
             return None, None
         needle = package_hash.lower()
         for path in sorted(pkgsinfo_root.rglob("*")):
-            if path.suffix.lower() not in {".yaml", ".yml", ".json"}:
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in {".yaml", ".yml", ".json", ".plist"}:
                 continue
             existing = self._load_pkgsinfo(path)
             if not existing:
@@ -445,14 +436,69 @@ class CimianImporter(Processor):
                 )
 
     def _apply_pkgsinfo_overlay(self, item):
-        overlay = self.env.get("pkgsinfo")
+        overlay = self._pkgsinfo_overlay()
         if not overlay:
             return item
-        if not isinstance(overlay, dict):
-            raise ProcessorError("pkgsinfo must be a dict when set")
         merged = _deep_merge(item, overlay)
         self._validate_pkgsinfo_keys(merged)
         return merged
+
+    def _apply_generated_defaults(self, item, item_name):
+        """Fill keys Munki recipes put in pkginfo when the overlay omitted them."""
+        if not self._as_list(item.get("catalogs")):
+            item["catalogs"] = ["import"]
+        if not self._as_list(item.get("supported_architectures")):
+            item["supported_architectures"] = ["x64"]
+        if "unattended_install" not in item:
+            item["unattended_install"] = True
+        if "unattended_uninstall" not in item:
+            item["unattended_uninstall"] = True
+        if not str(item.get("display_name") or "").strip():
+            item["display_name"] = item_name
+        return item
+
+    def _reject_installer_unresolved(self, installer):
+        """Reject leftover %VAR% in installer list/string fields from pkgsinfo."""
+        if not isinstance(installer, dict):
+            return
+        for key in ("flags", "switches", "args", "arguments"):
+            values = installer.get(key)
+            if values is None:
+                continue
+            self._reject_unresolved(self._as_list(values), f"installer.{key}")
+        subcommand = installer.get("subcommand")
+        if subcommand is not None and "%" in str(subcommand):
+            raise ProcessorError("Unresolved substitution in installer.subcommand")
+
+    def _apply_version_comparison_key(self, item):
+        key = self.env.get("version_comparison_key")
+        if not key or "installs" not in item:
+            return
+        if not isinstance(item["installs"], list):
+            raise ProcessorError("pkgsinfo.installs must be a list when set")
+        for install_item in item["installs"]:
+            if not isinstance(install_item, dict):
+                raise ProcessorError("pkgsinfo.installs entries must be dicts")
+            if key not in install_item:
+                path = install_item.get("path") or install_item.get("file") or "?"
+                raise ProcessorError(
+                    "version_comparison_key "
+                    f"'{key}' could not be found in the installs item for path '{path}'"
+                )
+            install_item["version_comparison_key"] = key
+
+    def _apply_metadata_additions(self, item):
+        if "metadata_additions" not in self.env:
+            return
+        additions = self.env["metadata_additions"]
+        if additions is None or additions == "":
+            return
+        if not isinstance(additions, dict):
+            raise ProcessorError("metadata_additions must be a dict when set")
+        metadata = item.setdefault("_metadata", {})
+        if not isinstance(metadata, dict):
+            raise ProcessorError("pkgsinfo._metadata must be a dict when set")
+        metadata.update(additions)
 
     def _maybe_extract_icon(self, source, repo, item_name):
         """Extract or reuse icon; return (icon_path, icon_name) or (None, None)."""
@@ -545,6 +591,24 @@ class CimianImporter(Processor):
             },
         }
 
+    def _staged_rel_location(self, pkginfo_subdir, item_name, version, suffix):
+        """Build pkgs/ relative path; honor cimianimport_pkgname like --pkgname."""
+        override = str(self.env.get("cimianimport_pkgname") or "").strip()
+        if override:
+            if "/" in override or "\\" in override or ".." in override:
+                raise ProcessorError(f"Invalid cimianimport_pkgname: {override}")
+            basename = Path(override).name
+            if not Path(basename).suffix:
+                basename = f"{basename}{suffix}"
+            if not SAFE_ITEM_NAME.fullmatch(Path(basename).stem.replace(" ", "")):
+                # Allow common versioned names (dots, hyphens) via SAFE on full stem
+                # after normalizing spaces — reject path traversal already handled.
+                stem = Path(basename).stem
+                if not re.fullmatch(r"[A-Za-z0-9._ -]+", stem):
+                    raise ProcessorError(f"Invalid cimianimport_pkgname: {override}")
+            return f"{pkginfo_subdir}/{item_name}/{basename}"
+        return f"{pkginfo_subdir}/{item_name}/{item_name}-{version}{suffix}"
+
     def main(self):
         self._clear_summary()
 
@@ -554,10 +618,24 @@ class CimianImporter(Processor):
         version = str(self.env["version"]).strip()
         installer_type = str(self.env["installer_type"]).strip().lower()
         pkginfo_subdir = str(self.env.get("pkginfo_subdir") or "apps").strip().strip("/\\")
-        catalogs = self._as_list(self.env.get("catalogs") or ["import"]) or ["import"]
-        architectures = self._as_list(self.env.get("supported_architectures") or ["x64"]) or [
-            "x64"
-        ]
+        overlay = self._pkgsinfo_overlay()
+        architectures = self._as_list(
+            overlay.get("supported_architectures") or ["x64"]
+        ) or ["x64"]
+
+        extension = str(
+            self.env.get("CIMIAN_PKGSINFO_FILE_EXTENSION") or "yaml"
+        ).strip().lstrip(".")
+        if (
+            not extension
+            or "/" in extension
+            or "\\" in extension
+            or ".." in extension
+            or not re.fullmatch(r"[A-Za-z0-9]+", extension)
+        ):
+            raise ProcessorError(
+                f"Invalid CIMIAN_PKGSINFO_FILE_EXTENSION: {extension}"
+            )
 
         if not source.is_file():
             raise ProcessorError(f"Downloaded installer does not exist: {source}")
@@ -573,17 +651,13 @@ class CimianImporter(Processor):
                 raise ProcessorError(f"Invalid pkginfo_subdir: {pkginfo_subdir}")
 
         package_hash = self._sha256(source)
-        expected_hash = str(self.env.get("expected_sha256") or "").strip().lower()
-        if expected_hash and package_hash != expected_hash:
-            raise ProcessorError(
-                f"SHA-256 mismatch for {source.name}: expected {expected_hash}, got {package_hash}"
-            )
-
         suffix = source.suffix.lower() or f".{installer_type}"
-        rel_location = f"{pkginfo_subdir}/{item_name}/{item_name}-{version}{suffix}"
+        rel_location = self._staged_rel_location(
+            pkginfo_subdir, item_name, version, suffix
+        )
         package_path = repo / "pkgs" / rel_location
         pkgsinfo_dir = repo / "pkgsinfo" / pkginfo_subdir / item_name
-        pkgsinfo_path = pkgsinfo_dir / f"{item_name}-{version}.yaml"
+        pkgsinfo_path = pkgsinfo_dir / f"{item_name}-{version}.{extension}"
 
         force = self._env_bool("force_cimianimport", False)
         if not force:
@@ -622,24 +696,6 @@ class CimianImporter(Processor):
             "hash": package_hash,
             "size": size,
         }
-        flags = self._as_list(self.env.get("installer_flags"))
-        switches = self._as_list(self.env.get("installer_switches"))
-        args = self._as_list(self.env.get("installer_args"))
-        subcommand = str(self.env.get("installer_subcommand") or "").strip()
-        # Reject leftover %VAR% so unresolved recipe substitutions are not written.
-        self._reject_unresolved(flags, "installer_flags")
-        self._reject_unresolved(switches, "installer_switches")
-        self._reject_unresolved(args, "installer_args")
-        if "%" in subcommand:
-            raise ProcessorError("Unresolved substitution in installer_subcommand")
-        if flags:
-            installer["flags"] = flags
-        if switches:
-            installer["switches"] = switches
-        if args:
-            installer["args"] = [str(value) for value in args]
-        if subcommand:
-            installer["subcommand"] = subcommand
 
         # MSI identity: recipe/overlay wins; otherwise read from the payload.
         if installer_type == "msi":
@@ -649,37 +705,23 @@ class CimianImporter(Processor):
             if upgrade_code:
                 installer["upgrade_code"] = upgrade_code
 
-        display_name = str(self.env.get("display_name") or item_name).strip()
-        unattended_install = self._env_bool("unattended_install", True)
-        unattended_uninstall = self._env_bool("unattended_uninstall", True)
+        appname = str(self.env.get("cimianimport_appname") or "").strip()
+        display_name = appname or item_name
 
         item = {
             "name": item_name,
             "display_name": display_name,
             "version": version,
-            "catalogs": catalogs,
+            "catalogs": ["import"],
             "supported_architectures": architectures,
             "installer": installer,
-            "unattended_install": unattended_install,
-            "unattended_uninstall": unattended_uninstall,
+            "unattended_install": True,
+            "unattended_uninstall": True,
         }
-        developer = str(self.env.get("developer") or "").strip()
-        category = str(self.env.get("category") or "").strip()
-        description = str(self.env.get("description") or "").strip()
-        if developer:
-            item["developer"] = developer
-        if category:
-            item["category"] = category
-        if description:
-            item["description"] = description
-
-        manifest_assignment = self.env.get("manifest_assignment")
-        if manifest_assignment:
-            if not isinstance(manifest_assignment, dict):
-                raise ProcessorError("manifest_assignment must be a dict when set")
-            item["manifest_assignment"] = manifest_assignment
 
         item = self._apply_pkgsinfo_overlay(item)
+        item = self._apply_generated_defaults(item, item_name)
+
         # Overlay may replace installer entirely; re-assert required identity fields.
         if not isinstance(item.get("installer"), dict):
             raise ProcessorError("pkgsinfo.installer must be a dict when set")
@@ -687,6 +729,11 @@ class CimianImporter(Processor):
         item["installer"].setdefault("location", rel_location)
         item["installer"].setdefault("hash", package_hash)
         item["installer"].setdefault("size", size)
+        self._reject_installer_unresolved(item["installer"])
+
+        self._apply_metadata_additions(item)
+        self._apply_version_comparison_key(item)
+        self._validate_pkgsinfo_keys(item)
 
         icon_path, icon_filename = self._maybe_extract_icon(source, repo, item_name)
         if icon_filename:
@@ -732,5 +779,3 @@ class CimianImporter(Processor):
         self.env["cimian_repo_changed"] = True
         self._set_summary(item, pkgsinfo_path, package_path, repo, icon_filename)
         self.output(f"Imported {item_name} {version} → {rel_location}")
-
-
